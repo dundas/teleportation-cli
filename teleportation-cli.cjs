@@ -602,7 +602,7 @@ async function commandTest() {
   
   // Test 3: Relay service
   console.log(c.yellow('Test 3: Relay API Service'));
-  const relayUrl = creds.RELAY_API_URL || 'http://localhost:3030';
+  const relayUrl = creds.RELAY_API_URL || 'https://api.teleportation.dev';
   if (checkService('relay', 3030) && checkServiceHealth(relayUrl)) {
     console.log(c.green('  ✅ PASS - Relay API running and healthy\n'));
     passed++;
@@ -757,7 +757,7 @@ async function commandDoctor() {
   // Check 4: Relay API connection
   console.log(c.yellow('4. Relay API Connection'));
   const creds = await getCredentials();
-  const relayUrl = creds.RELAY_API_URL || 'http://localhost:3030';
+  const relayUrl = creds.RELAY_API_URL || 'https://api.teleportation.dev';
   
   if (!relayUrl) {
     console.log(c.red('   ❌ Relay API URL not configured\n'));
@@ -1128,7 +1128,7 @@ async function commandLogin(args) {
 async function performLogin(manager, flags, positional) {
   let apiKey = flags['api-key'] || flags.k;
   let token = flags.token || flags.t;
-  const relayApiUrl = flags['relay-url'] || flags.r || process.env.RELAY_API_URL || 'http://localhost:3030';
+  const relayApiUrl = flags['relay-url'] || flags.r || process.env.RELAY_API_URL || 'https://api.teleportation.dev';
   
   // If API key provided via flag
   if (apiKey) {
