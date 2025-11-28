@@ -1,0 +1,59 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /Users/kefentse/dev_env/teleporter/teleportation/.claude/hooks/pre_tool_use.mjs"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /Users/kefentse/dev_env/teleporter/teleportation/.claude/hooks/stop.mjs"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /Users/kefentse/dev_env/teleporter/teleportation/.claude/hooks/session_start.mjs"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /Users/kefentse/dev_env/teleporter/teleportation/.claude/hooks/session_end.mjs"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node /Users/kefentse/dev_env/teleporter/teleportation/.claude/hooks/notification.mjs"
+          }
+        ]
+      }
+    ]
+  }
+}

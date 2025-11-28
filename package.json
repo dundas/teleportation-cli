@@ -1,0 +1,50 @@
+{
+  "name": "@teleportation/cli",
+  "version": "0.1.0",
+  "description": "Remote approval system for Claude Code - approve AI coding changes from your phone",
+  "type": "module",
+  "main": "teleportation-cli.cjs",
+  "bin": {
+    "teleportation": "./teleportation-cli.cjs"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dundas/teleportation-cli.git"
+  },
+  "homepage": "https://teleportation.dev",
+  "bugs": {
+    "url": "https://github.com/dundas/teleportation-cli/issues"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "remote-control",
+    "approval",
+    "mobile",
+    "ai",
+    "coding-assistant",
+    "cli",
+    "developer-tools"
+  ],
+  "author": "Dundas",
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "test": "node --test lib/**/*.test.js",
+    "prepublishOnly": "npm test"
+  },
+  "files": [
+    "lib/",
+    ".claude/",
+    "teleportation-cli.cjs",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {}
+}
+
