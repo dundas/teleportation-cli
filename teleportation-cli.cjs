@@ -2275,6 +2275,7 @@ async function commandInstallHooks() {
     'session_start.mjs',
     'session_end.mjs',
     'notification.mjs',
+    'user_prompt_submit.mjs',
     'config-loader.mjs',
     'session-register.mjs'
   ];
@@ -2375,6 +2376,13 @@ async function commandInstallHooks() {
       hooks: [{
         type: "command",
         command: `node ${quotePath(path.join(globalHooksDir, 'notification.mjs'))}`
+      }]
+    }],
+    UserPromptSubmit: [{
+      matcher: ".*",
+      hooks: [{
+        type: "command",
+        command: `node ${quotePath(path.join(globalHooksDir, 'user_prompt_submit.mjs'))}`
       }]
     }]
   };
@@ -2542,6 +2550,13 @@ async function commandCommand() {
 async function commandUpdate() {
   console.log(c.cyan('\n⚡ Teleportation Update\n'));
   
+  // Validate HOME_DIR exists
+  if (!HOME_DIR || !fs.existsSync(HOME_DIR)) {
+    console.log(c.red('❌ Error: HOME directory not found\n'));
+    console.log(c.yellow('Set HOME environment variable and try again.\n'));
+    return;
+  }
+  
   const installDir = path.join(HOME_DIR, '.teleportation-cli');
   
   // Check if installed via git
@@ -2551,54 +2566,214 @@ async function commandUpdate() {
     return;
   }
   
-  console.log(c.yellow('Step 1: Pulling latest changes...\n'));
+  console.log(c.yellow('Step 1: Checking for local changes...\n'));
+  
+  const { execSync, execFile } = require('child_process');
+  let stashedChanges = false;
+  let stashHash = null;
+  
+  // Helper to check if command exists (POSIX compliant)
+  // Whitelist prevents command injection if cmd parameter is compromised
+  const commandExists = (cmd) => {
+    // Whitelist of allowed commands to prevent command injection
+    const validCommands = ['bun', 'npm', 'git', 'node'];
+    if (!validCommands.includes(cmd)) {
+      return false;
+    }
+    try {
+      execSync(`command -v ${cmd}`, { stdio: 'pipe' });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  
+  // Helper to restore stashed changes using specific stash hash
+  const restoreStash = () => {
+    if (stashedChanges && stashHash !== null) {
+      try {
+        console.log(c.yellow('  Restoring stashed changes...\n'));
+        // Use execFile with args array for safety
+        execFile('git', ['stash', 'pop', `stash@{${stashHash}}`], { 
+          cwd: installDir, 
+          stdio: 'pipe' 
+        });
+        console.log(c.green('  ✅ Stashed changes restored\n'));
+      } catch (e) {
+        console.log(c.yellow(`  ⚠️  Could not restore stash: ${e.message}\n`));
+        console.log(c.yellow(`  Run \`git stash pop stash@{${stashHash}}\` manually to restore.\n`));
+      }
+    } else if (stashedChanges) {
+      // Fallback if stash hash wasn't captured
+      console.log(c.yellow('  ⚠️  Stash hash not available. Run `git stash pop` manually.\n'));
+    }
+  };
+  
+  // Get current version before update
+  let versionFrom = 'unknown';
+  try {
+    const pkgBefore = JSON.parse(fs.readFileSync(path.join(installDir, 'package.json'), 'utf8'));
+    versionFrom = pkgBefore.version || 'unknown';
+  } catch (e) {
+    // Ignore - will show unknown
+  }
+  
+  // Check for uncommitted changes (including untracked files)
+  try {
+    const status = execSync('git status --porcelain', { cwd: installDir, encoding: 'utf8' });
+    if (status.trim()) {
+      console.log(c.yellow('  ⚠️  Uncommitted changes detected. Stashing...\n'));
+      try {
+        // Use -u to include untracked files, capture stash hash from output
+        const stashOutput = execSync('git stash push -u -m "teleportation-update-stash"', { 
+          cwd: installDir, 
+          encoding: 'utf8',
+          stdio: 'pipe' 
+        });
+        
+        // Extract stash hash from output (e.g., "Saved working directory and index state On main: stash@{0}")
+        const stashMatch = stashOutput.match(/stash@\{(\d+)\}/);
+        if (stashMatch) {
+          stashHash = stashMatch[1];
+        }
+        
+        console.log(c.green(`  ✅ Changes stashed (will restore on failure)\n`));
+        stashedChanges = true;
+      } catch (stashErr) {
+        console.log(c.red(`  ❌ Failed to stash: ${stashErr.message}`));
+        console.log(c.yellow('  Please commit or discard changes manually.\n'));
+        return;
+      }
+    } else {
+      console.log(c.green('  ✅ Working directory clean\n'));
+    }
+  } catch (e) {
+    console.log(c.yellow(`  ⚠️  Could not check git status: ${e.message}\n`));
+  }
+  
+  console.log(c.yellow('Step 2: Pulling latest changes...\n'));
   
   try {
-    // Pull latest
-    const { execSync } = require('child_process');
-    execSync('git pull origin main', { 
+    // Detect current branch dynamically
+    const branchRaw = execSync('git rev-parse --abbrev-ref HEAD', { cwd: installDir, encoding: 'utf8' }).trim();
+    
+    // Sanitize branch name - only allow alphanumeric, dots, underscores, slashes, hyphens
+    // Also enforce max length for safety
+    if (!/^[a-zA-Z0-9._\/-]{1,100}$/.test(branchRaw)) {
+      console.log(c.red(`  ❌ Invalid branch name detected: ${branchRaw}\n`));
+      console.log(c.yellow('  Branch names must contain only: letters, numbers, dots, underscores, slashes, hyphens (max 100 chars)\n'));
+      restoreStash();
+      return;
+    }
+    
+    const branch = branchRaw;
+    console.log(c.dim(`  Branch: ${branch}\n`));
+    
+    // Use execFile with args array to prevent command injection
+    execFile('git', ['pull', 'origin', branch], { 
       cwd: installDir, 
       stdio: 'inherit' 
     });
     console.log(c.green('\n  ✅ Code updated\n'));
   } catch (e) {
     console.log(c.red(`  ❌ Failed to pull: ${e.message}\n`));
+    restoreStash();
     return;
   }
   
-  console.log(c.yellow('Step 2: Installing dependencies...\n'));
+  console.log(c.yellow('Step 3: Installing dependencies...\n'));
   
+  let depsInstalled = false;
   try {
-    const { execSync } = require('child_process');
-    // Try bun first, fall back to npm
-    try {
-      execSync('bun install --silent', { cwd: installDir, stdio: 'pipe' });
-      console.log(c.green('  ✅ Dependencies updated (bun)\n'));
-    } catch {
-      execSync('npm install --silent', { cwd: installDir, stdio: 'pipe' });
-      console.log(c.green('  ✅ Dependencies updated (npm)\n'));
+    // Check which package manager is available
+    if (commandExists('bun')) {
+      // Don't use --silent so errors are visible
+      execSync('bun install', { cwd: installDir, stdio: 'inherit' });
+      console.log(c.green('\n  ✅ Dependencies updated (bun)\n'));
+      depsInstalled = true;
+    } else if (commandExists('npm')) {
+      // Don't use --silent so errors are visible
+      execSync('npm install', { cwd: installDir, stdio: 'inherit' });
+      console.log(c.green('\n  ✅ Dependencies updated (npm)\n'));
+      depsInstalled = true;
+    } else {
+      console.log(c.red('  ❌ No package manager found (bun or npm required)\n'));
+      console.log(c.yellow('  Install Node.js or Bun and run: teleportation update\n'));
     }
   } catch (e) {
-    console.log(c.yellow(`  ⚠️  Could not update dependencies: ${e.message}\n`));
+    console.log(c.red(`\n  ❌ Dependency installation failed: ${e.message}\n`));
+    console.log(c.yellow('  Hooks may not work correctly. Run manually:\n'));
+    console.log(c.dim(`     cd ${installDir} && npm install\n`));
   }
   
-  console.log(c.yellow('Step 3: Updating hooks...\n'));
+  console.log(c.yellow('Step 4: Updating hooks...\n'));
   
-  // Run install-hooks
-  await commandInstallHooks();
+  // Run install-hooks with error handling
+  let hooksInstalled = false;
+  try {
+    await commandInstallHooks();
+    hooksInstalled = true;
+  } catch (e) {
+    console.log(c.red(`  ❌ Hook installation failed: ${e.message}\n`));
+    console.log(c.yellow('  Run `teleportation install-hooks` manually to retry.\n'));
+    // Don't restore stash here - code was updated successfully, hooks can be fixed separately
+  }
   
-  // Get version
-  const pkg = JSON.parse(fs.readFileSync(path.join(installDir, 'package.json'), 'utf8'));
+  // Get version after update
+  let versionTo = 'unknown';
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(installDir, 'package.json'), 'utf8'));
+    versionTo = pkg.version || 'unknown';
+  } catch (e) {
+    console.log(c.yellow(`  ⚠️  Could not read version: ${e.message}\n`));
+  }
   
-  console.log(c.cyan('╭─────────────────────────────────────────────────────╮'));
-  console.log(c.cyan('│                                                     │'));
-  console.log(c.cyan('│   ') + c.green('✅ Update complete!') + c.cyan('                            │'));
-  console.log(c.cyan('│                                                     │'));
-  console.log(c.cyan('│   Version: ') + c.green(pkg.version.padEnd(38)) + c.cyan('│'));
-  console.log(c.cyan('│                                                     │'));
-  console.log(c.cyan('│   ') + c.yellow('⚠️  Restart Claude Code') + c.cyan(' to apply changes.      │'));
-  console.log(c.cyan('│                                                     │'));
-  console.log(c.cyan('╰─────────────────────────────────────────────────────╯\n'));
+  // Calculate dynamic padding (box width is 55 chars, need space for labels and borders)
+  const formatVersionLine = (label, version) => {
+    const maxVersionLen = 30; // Reasonable max for version strings
+    const versionDisplay = version.length > maxVersionLen ? version.slice(0, maxVersionLen - 3) + '...' : version;
+    const padding = 55 - label.length - versionDisplay.length - 4; // 4 for borders and spaces
+    return `│  ${label}${' '.repeat(Math.max(1, padding))}${versionDisplay}│`;
+  };
+  
+  // Show appropriate completion message
+  console.log('');
+  if (hooksInstalled && depsInstalled) {
+    console.log(c.green('╭─────────────────────────────────────────────────────╮'));
+    console.log(c.green('│  ✅ Update complete!                                │'));
+    console.log(c.green('│                                                     │'));
+    if (versionFrom !== 'unknown' || versionTo !== 'unknown') {
+      console.log(c.green(formatVersionLine('From:', versionFrom)));
+      console.log(c.green(formatVersionLine('To:  ', versionTo)));
+    } else {
+      console.log(c.green(formatVersionLine('Version:', versionTo)));
+    }
+    console.log(c.green('│                                                     │'));
+    console.log(c.green('│  ') + c.yellow('⚠️  Restart Claude Code to apply changes.') + c.green('       │'));
+    console.log(c.green('╰─────────────────────────────────────────────────────╯'));
+  } else if (hooksInstalled) {
+    console.log(c.yellow('╭─────────────────────────────────────────────────────╮'));
+    console.log(c.yellow('│  ⚠️  Update partially complete                      │'));
+    console.log(c.yellow('│                                                     │'));
+    if (versionFrom !== 'unknown' || versionTo !== 'unknown') {
+      console.log(c.yellow(formatVersionLine('From:', versionFrom)));
+      console.log(c.yellow(formatVersionLine('To:  ', versionTo)));
+    } else {
+      console.log(c.yellow(formatVersionLine('Version:', versionTo)));
+    }
+    console.log(c.yellow('│  Hooks: ✅  Dependencies: ❌                        │'));
+    console.log(c.yellow('│                                                     │'));
+    console.log(c.yellow('│  Run: cd ~/.teleportation-cli && npm install        │'));
+    console.log(c.yellow('╰─────────────────────────────────────────────────────╯'));
+  } else {
+    console.log(c.red('╭─────────────────────────────────────────────────────╮'));
+    console.log(c.red('│  ❌ Update failed                                   │'));
+    console.log(c.red('│                                                     │'));
+    console.log(c.red('│  Code was updated but hooks failed to install.      │'));
+    console.log(c.red('│  Run: teleportation install-hooks                   │'));
+    console.log(c.red('╰─────────────────────────────────────────────────────╯'));
+  }
+  console.log('');
 }
 
 // Main

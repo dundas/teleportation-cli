@@ -104,6 +104,30 @@ const readStdin = () => new Promise((resolve, reject) => {
     } catch (error) {
       // Ignore errors reading PID file - heartbeat might not have been started
     }
+
+    // Delete registration marker file
+    try {
+      const registrationMarker = join(tmpdir(), `teleportation-session-${session_id}.registered`);
+      await unlink(registrationMarker);
+    } catch (e) {
+      // Ignore errors - marker might not exist
+    }
+
+    // Clean up model tracking files
+    try {
+      const lastModelFile = join(tmpdir(), `teleportation-last-model-${session_id}.txt`);
+      await unlink(lastModelFile);
+    } catch (e) {
+      // Ignore errors - file may not exist
+    }
+
+    // Clean up model change marker file (if it exists)
+    try {
+      const modelChangeMarker = join(tmpdir(), `teleportation-model-changing-${session_id}.txt`);
+      await unlink(modelChangeMarker);
+    } catch (e) {
+      // Ignore errors - file may not exist
+    }
   }
 
   // Clean up session resources

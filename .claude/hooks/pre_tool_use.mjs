@@ -4,6 +4,7 @@ import { stdin, stdout, exit, env } from 'node:process';
 import { appendFileSync } from 'node:fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { homedir, tmpdir } from 'os';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -22,13 +23,25 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 let extractSessionMetadata = null;
 async function getSessionMetadata(cwd) {
   if (!extractSessionMetadata) {
-    try {
-      const metadataModule = await import('../../lib/session/metadata.js');
-      extractSessionMetadata = metadataModule.extractSessionMetadata;
-    } catch (e) {
-      return {};
+    // Try multiple paths for the metadata module
+    const possiblePaths = [
+      join(__dirname, '..', '..', 'lib', 'session', 'metadata.js'),
+      join(homedir(), '.teleportation', 'lib', 'session', 'metadata.js'),
+    ];
+
+    for (const path of possiblePaths) {
+      try {
+        const mod = await import('file://' + path);
+        extractSessionMetadata = mod.extractSessionMetadata;
+        break;
+      } catch (e) {
+        // Try next path
+      }
     }
   }
+
+  if (!extractSessionMetadata) return {};
+
   try {
     return await extractSessionMetadata(cwd);
   } catch (e) {
@@ -133,44 +146,192 @@ const fetchJson = async (url, opts) => {
   const formatDaemonUpdate = (results) => {
     if (!results || results.length === 0) return '';
 
-    const header = `👷 **Daemon Work Update** (${results.length} command${results.length > 1 ? 's' : ''} executed while you were away)\n\n`;
+    // Check if any browser tasks were completed
+    const hasBrowserTasks = results.some(r => {
+      const toolName = (r.tool_name || '').toLowerCase();
+      const command = (r.command || '').toLowerCase();
+      return toolName.includes('browser') || toolName.includes('mcp') || 
+             command.includes('browser') || command.includes('mcp');
+    });
     
-    const details = results.map(r => {
-      const status = r.exit_code === 0 ? '✅ Success' : `❌ Failed (Exit: ${r.exit_code})`;
-      const time = new Date(r.executed_at).toLocaleTimeString();
-      const output = r.stdout || r.stderr || '(No output)';
-      const excerpt = output.length > 500 ? output.substring(0, 500) + '...' : output;
+    const taskType = hasBrowserTasks ? 'browser/interactive task' : 'task';
+    const header = `🤖 **Daemon Work Update** (${results.length} ${taskType}${results.length > 1 ? 's' : ''} completed while you were away)\n\n`;
+    
+    const formatOutput = (output, toolName) => {
+      if (!output || output.trim() === '') return '(No output)';
       
-      return `**Command:** \`${r.command}\`\n**Status:** ${status} at ${time}\n**Output:**\n\`\`\`\n${excerpt}\n\`\`\`\n`;
+      // Try to detect and format JSON output
+      try {
+        const parsed = JSON.parse(output);
+        // For browser snapshots or large JSON, provide a summary
+        if (parsed.type === 'snapshot' || parsed.type === 'accessibility') {
+          const url = parsed.url || parsed.page?.url || '';
+          const title = parsed.title || parsed.page?.title || '';
+          const elements = parsed.elements?.length || parsed.children?.length || 0;
+          return `Browser snapshot captured:\n  • URL: ${url}\n  • Title: ${title}\n  • Elements: ${elements}\n  • Full snapshot available in output`;
+        }
+        // For other JSON, format nicely
+        return JSON.stringify(parsed, null, 2);
+      } catch {
+        // Not JSON, return as-is but format better
+        return output;
+      }
+    };
+
+    const formatToolName = (toolName, command) => {
+      if (toolName && toolName.toLowerCase().includes('browser')) return '🌐 Browser';
+      if (toolName && toolName.toLowerCase().includes('mcp')) return '🔌 MCP Tool';
+      if (command && command.toLowerCase().includes('browser')) return '🌐 Browser';
+      if (command && command.toLowerCase().includes('mcp')) return '🔌 MCP Tool';
+      return toolName || 'Command';
+    };
+
+    const details = results.map(r => {
+      // Determine success: exit_code 0 OR if there's meaningful output (browser tasks may not use exit codes)
+      const hasOutput = (r.stdout && r.stdout.trim()) || (r.stderr && r.stderr.trim());
+      const isSuccess = r.exit_code === 0 || r.exit_code === null || (hasOutput && !r.stderr);
+      const status = isSuccess ? '✅ Success' : `❌ Failed${r.exit_code !== null ? ` (Exit: ${r.exit_code})` : ''}`;
+      const time = new Date(r.executed_at).toLocaleTimeString();
+      
+      const toolName = formatToolName(r.tool_name, r.command);
+      const output = r.stdout || r.stderr || '';
+      const formattedOutput = formatOutput(output, r.tool_name);
+      
+      // For browser tasks or large outputs, provide a summary first
+      const isBrowserTask = toolName.includes('Browser') || toolName.includes('MCP');
+      const outputPreview = isBrowserTask && output.length > 1000
+        ? formattedOutput.split('\n').slice(0, 20).join('\n') + '\n...(see full output below)...'
+        : formattedOutput.length > 2000
+        ? formattedOutput.substring(0, 2000) + '\n...(truncated, see full output for details)...'
+        : formattedOutput;
+      
+      let resultText = `**${toolName}:** ${r.command || '(task completed)'}\n`;
+      resultText += `**Status:** ${status} at ${time}\n`;
+      
+      if (output.trim()) {
+        resultText += `\n**Result:**\n`;
+        // Use code blocks only for structured data, plain text otherwise
+        if (formattedOutput.includes('\n') || formattedOutput.length > 100) {
+          resultText += `\`\`\`\n${outputPreview}\n\`\`\`\n`;
+        } else {
+          resultText += `${outputPreview}\n`;
+        }
+      }
+      
+      return resultText;
     }).join('\n---\n\n');
 
-    const successCount = results.filter(r => r.exit_code === 0).length;
+    const successCount = results.filter(r => {
+      const hasOutput = (r.stdout && r.stdout.trim()) || (r.stderr && r.stderr.trim());
+      return r.exit_code === 0 || r.exit_code === null || (hasOutput && !r.stderr);
+    }).length;
     const failCount = results.length - successCount;
     const summary = `\n**Summary:** ${successCount} successful, ${failCount} failed.`;
-
-    let message = header + details + summary;
     
-    // Truncate if too long (keep under 5000 chars)
-    if (message.length > 5000) {
-      message = message.substring(0, 5000) + '\n...(truncated)...';
+    // Add a prompt to ensure results are acknowledged
+    const browserTaskCount = results.filter(r => {
+      const toolName = (r.tool_name || '').toLowerCase();
+      const command = (r.command || '').toLowerCase();
+      return toolName.includes('browser') || toolName.includes('mcp') || 
+             command.includes('browser') || command.includes('mcp');
+    }).length;
+    
+    const footer = browserTaskCount > 0 
+      ? `\n\n💡 **Note:** Browser task results are included above. Please review and summarize what was accomplished.`
+      : '';
+
+    let message = header + details + summary + footer;
+    
+    // Increase limit for browser tasks (they need more space)
+    const maxLength = 10000; // Increased from 5000
+    if (message.length > maxLength) {
+      message = message.substring(0, maxLength) + '\n\n...(output truncated, check full results for complete details)...';
     }
     
     return message;
   };
 
-  // Register session with daemon if enabled
-  // Relay auto-creates sessions on first approval, so no need to pre-register there
+  // Register session: relay first (source of truth), then daemon
+  const cwd = process.cwd();
+  const meta = await getSessionMetadata(cwd);
+  log(`Session metadata: project=${meta.project_name}, hostname=${meta.hostname}, branch=${meta.current_branch}, model=${meta.current_model || 'default'}`);
+
+  // Check if model has changed since last tool use
+  // This detects when user runs /model to switch models mid-session
+  const LAST_MODEL_FILE = join(tmpdir(), `teleportation-last-model-${session_id}.txt`);
+  let modelChanged = false;
+  try {
+    const { readFile, writeFile } = await import('fs/promises');
+    let lastModel = null;
+    try {
+      lastModel = (await readFile(LAST_MODEL_FILE, 'utf8')).trim();
+    } catch (e) {
+      // File doesn't exist yet - first tool use
+    }
+
+    if (lastModel && meta.current_model && lastModel !== meta.current_model) {
+      modelChanged = true;
+      log(`Model changed detected: ${lastModel} -> ${meta.current_model}`);
+
+      // Log model change to timeline
+      if (RELAY_API_URL && RELAY_API_KEY) {
+        try {
+          await fetch(`${RELAY_API_URL}/api/timeline/log`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${RELAY_API_KEY}`
+            },
+            body: JSON.stringify({
+              session_id,
+              event_type: 'model_changed',
+              data: {
+                previous_model: lastModel,
+                new_model: meta.current_model,
+                timestamp: Date.now()
+              }
+            })
+          });
+          log(`Model change logged to timeline`);
+        } catch (e) {
+          log(`Failed to log model change: ${e.message}`);
+        }
+      }
+    }
+
+    // Update last known model
+    if (meta.current_model) {
+      await writeFile(LAST_MODEL_FILE, meta.current_model, { mode: 0o600 });
+    }
+  } catch (e) {
+    log(`Model change detection error: ${e.message}`);
+  }
+
+  // 1. Register with relay first - makes session visible in mobile UI
+  if (session_id && RELAY_API_URL && RELAY_API_KEY) {
+    try {
+      log(`Registering session with relay: ${session_id}`);
+      const { ensureSessionRegistered } = await import('./session-register.mjs');
+      await ensureSessionRegistered(session_id, cwd, config);
+      log(`Session registered with relay successfully`);
+
+      // If model changed, update session metadata immediately
+      if (modelChanged) {
+        const { updateSessionMetadata } = await import('./session-register.mjs');
+        await updateSessionMetadata(session_id, cwd, config);
+        log(`Session metadata updated with new model`);
+      }
+    } catch (e) {
+      log(`Warning: Failed to register session with relay: ${e.message}`);
+    }
+  }
+
+  // 2. Then register with daemon (local infrastructure for this session)
   if (session_id && DAEMON_ENABLED) {
     try {
       const daemonUrl = `http://127.0.0.1:${DAEMON_PORT}`;
       log(`Registering session with daemon: ${session_id}`);
-      const cwd = process.cwd();
       
-      // Extract session metadata (project, branch, hostname, etc.)
-      const meta = await getSessionMetadata(cwd);
-      log(`Session metadata: ${JSON.stringify(meta)}`);
-      
-      // Use raw fetch to avoid throwing if daemon is down/unresponsive (best effort)
       const res = await fetch(`${daemonUrl}/sessions/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },

@@ -5,6 +5,7 @@ import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { homedir } from 'os';
+import { existsSync, statSync, writeFileSync, mkdirSync } from 'fs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -13,11 +14,31 @@ const __dirname = dirname(__filename);
 let extractSessionMetadata = null;
 async function getSessionMetadata(cwd) {
   if (!extractSessionMetadata) {
-    try {
-      const metadataModule = await import('../../lib/session/metadata.js');
-      extractSessionMetadata = metadataModule.extractSessionMetadata;
-    } catch (e) {
-      if (env.DEBUG) console.error(`[SessionStart] Failed to load metadata module: ${e.message}`);
+    // Try multiple possible paths for the metadata module
+    const possiblePaths = [
+      // Installed location (copied during `teleportation on`)
+      join(homedir(), '.teleportation', 'lib', 'session', 'metadata.js'),
+      // Development mode - relative to hooks directory
+      join(__dirname, '..', '..', 'lib', 'session', 'metadata.js'),
+      // If hook is still in project directory
+      join(process.cwd(), 'lib', 'session', 'metadata.js')
+    ];
+
+    // Check existsSync first to avoid expensive import failures
+    for (const metadataPath of possiblePaths) {
+      if (!existsSync(metadataPath)) continue;
+      try {
+        const metadataModule = await import(metadataPath);
+        extractSessionMetadata = metadataModule.extractSessionMetadata;
+        if (extractSessionMetadata) break;
+      } catch {
+        // Try next path
+        continue;
+      }
+    }
+
+    if (!extractSessionMetadata) {
+      if (env.DEBUG) console.error(`[SessionStart] Metadata module not found`);
       return {};
     }
   }
@@ -44,6 +65,61 @@ const fetchWithTimeout = (url, opts, timeoutMs = 2000) => {
   ]);
 };
 
+// Session marker file to track when this Claude Code session started
+const TELEPORTATION_DIR = join(homedir(), '.teleportation');
+const SESSION_MARKER_FILE = join(TELEPORTATION_DIR, '.session_marker');
+const CREDENTIALS_FILE = join(TELEPORTATION_DIR, 'credentials');
+
+/**
+ * Check if credentials were modified after the session started.
+ * If a session marker exists and credentials are newer, user needs to restart.
+ */
+function checkRestartNeeded() {
+  try {
+    if (!existsSync(SESSION_MARKER_FILE) || !existsSync(CREDENTIALS_FILE)) {
+      return { needsRestart: false };
+    }
+
+    const markerMtime = statSync(SESSION_MARKER_FILE).mtimeMs;
+    const credsMtime = statSync(CREDENTIALS_FILE).mtimeMs;
+
+    if (credsMtime > markerMtime) {
+      return {
+        needsRestart: true,
+        reason: 'Credentials changed after session started',
+        markerTime: new Date(markerMtime).toISOString(),
+        credsTime: new Date(credsMtime).toISOString()
+      };
+    }
+
+    return { needsRestart: false };
+  } catch (e) {
+    if (env.DEBUG) console.error(`[SessionStart] Restart check error: ${e.message}`);
+    return { needsRestart: false };
+  }
+}
+
+/**
+ * Update the session marker file with current timestamp.
+ * Called when a session starts to track when this Claude Code instance began.
+ */
+function updateSessionMarker(sessionId) {
+  try {
+    if (!existsSync(TELEPORTATION_DIR)) {
+      mkdirSync(TELEPORTATION_DIR, { recursive: true, mode: 0o700 });
+    }
+    const markerData = JSON.stringify({
+      timestamp: Date.now(),
+      sessionId: sessionId,
+      startedAt: new Date().toISOString()
+    });
+    writeFileSync(SESSION_MARKER_FILE, markerData, { mode: 0o600 });
+    if (env.DEBUG) console.error(`[SessionStart] Session marker updated`);
+  } catch (e) {
+    if (env.DEBUG) console.error(`[SessionStart] Failed to update session marker: ${e.message}`);
+  }
+}
+
 (async () => {
   let input = {};
   try {
@@ -54,19 +130,20 @@ const fetchWithTimeout = (url, opts, timeoutMs = 2000) => {
   let { session_id, cwd } = input || {};
   const claude_session_id = session_id;
 
-  // Override with our own process-unique session ID
-  try {
-    const { getTeleportationSessionId } = await import('./get-session-id.mjs');
-    const uniqueId = getTeleportationSessionId(session_id);
-    if (uniqueId) {
-      if (env.DEBUG) {
-        console.error(`[SessionStart] Overriding Claude session ID ${session_id} with unique ID ${uniqueId}`);
-      }
-      session_id = uniqueId;
+  // Check if credentials changed since last session start - user may need to restart
+  const restartCheck = checkRestartNeeded();
+  if (restartCheck.needsRestart) {
+    // Output a warning to stderr (shown to user)
+    console.error('\n⚠️  Teleportation credentials changed after this session started.');
+    console.error('   Restart Claude Code to apply the new credentials.\n');
+    if (env.DEBUG) {
+      console.error(`   Session started: ${restartCheck.markerTime}`);
+      console.error(`   Credentials updated: ${restartCheck.credsTime}`);
     }
-  } catch (e) {
-    if (env.DEBUG) console.error(`[SessionStart] Failed to get unique session ID: ${e.message}`);
   }
+
+  // Update session marker with current time (for future restart detection)
+  updateSessionMarker(session_id);
 
   // Load config from encrypted credentials, legacy config file, or env vars
   let config;
@@ -194,9 +271,13 @@ const fetchWithTimeout = (url, opts, timeoutMs = 2000) => {
 
       // Register session with daemon (with metadata)
       try {
-        // Extract session metadata (project, branch, hostname, etc.)
+        // Extract session metadata (project, branch, hostname, current_model, etc.)
         const meta = await getSessionMetadata(cwd || process.cwd());
-        
+
+        if (env.DEBUG && meta.current_model) {
+          console.error(`[SessionStart] Captured model: ${meta.current_model}`);
+        }
+
         await fetchWithTimeout(`${daemonUrl}/sessions/register`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -220,30 +301,8 @@ const fetchWithTimeout = (url, opts, timeoutMs = 2000) => {
     }
   }
 
-  // Sessions are now registered lazily when needed (on approval creation or message send)
-  // Auto-registration on session start is disabled by default
-  // Set AUTO_REGISTER_SESSION=true to enable old behavior
-  const AUTO_REGISTER_SESSION = env.AUTO_REGISTER_SESSION === 'true';
-
-  if (!AUTO_REGISTER_SESSION) {
-    // Just exit - session will be registered when first approval/message is created
-    try { process.stdout.write(JSON.stringify({ suppressOutput: true })); } catch {}
-    return exit(0);
-  }
-
-  // Legacy behavior: auto-register on session start (only if AUTO_REGISTER_SESSION=true)
-  if (!session_id || !RELAY_API_URL || !RELAY_API_KEY) return exit(0);
-
-  try {
-    const { ensureSessionRegistered } = await import('./session-register.mjs');
-    await ensureSessionRegistered(session_id, cwd, config);
-  } catch (error) {
-    // Don't fail session start if registration fails
-    if (env.DEBUG) {
-      console.error('[SessionStart] Failed to register session:', error.message);
-    }
-  }
-
+  // Session registration with relay happens on first message (in pre_tool_use hook)
+  // This hook just starts the daemon infrastructure
   try { process.stdout.write(JSON.stringify({ suppressOutput: true })); } catch {}
   return exit(0);
 })();
