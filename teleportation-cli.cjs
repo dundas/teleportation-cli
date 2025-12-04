@@ -213,6 +213,7 @@ function commandHelp() {
   console.log('  ' + c.green('on') + '               Enable remote control hooks');
   console.log('  ' + c.green('off') + '              Disable remote control hooks');
   console.log('  ' + c.green('install-hooks') + '    Install hooks globally to ~/.claude/hooks/');
+  console.log('  ' + c.green('update') + '           Update CLI and hooks to latest version');
   console.log('  ' + c.green('test') + '             Run diagnostic tests');
   console.log('  ' + c.green('doctor') + '           Run comprehensive diagnostics\n');
 
@@ -2535,12 +2536,77 @@ async function commandCommand() {
   }
 }
 
+/**
+ * Update command - pulls latest code and reinstalls hooks
+ */
+async function commandUpdate() {
+  console.log(c.cyan('\n⚡ Teleportation Update\n'));
+  
+  const installDir = path.join(HOME_DIR, '.teleportation-cli');
+  
+  // Check if installed via git
+  if (!fs.existsSync(path.join(installDir, '.git'))) {
+    console.log(c.yellow('⚠️  Not installed via git. Reinstall with:\n'));
+    console.log(c.green('   curl -fsSL https://get.teleportation.dev | bash\n'));
+    return;
+  }
+  
+  console.log(c.yellow('Step 1: Pulling latest changes...\n'));
+  
+  try {
+    // Pull latest
+    const { execSync } = require('child_process');
+    execSync('git pull origin main', { 
+      cwd: installDir, 
+      stdio: 'inherit' 
+    });
+    console.log(c.green('\n  ✅ Code updated\n'));
+  } catch (e) {
+    console.log(c.red(`  ❌ Failed to pull: ${e.message}\n`));
+    return;
+  }
+  
+  console.log(c.yellow('Step 2: Installing dependencies...\n'));
+  
+  try {
+    const { execSync } = require('child_process');
+    // Try bun first, fall back to npm
+    try {
+      execSync('bun install --silent', { cwd: installDir, stdio: 'pipe' });
+      console.log(c.green('  ✅ Dependencies updated (bun)\n'));
+    } catch {
+      execSync('npm install --silent', { cwd: installDir, stdio: 'pipe' });
+      console.log(c.green('  ✅ Dependencies updated (npm)\n'));
+    }
+  } catch (e) {
+    console.log(c.yellow(`  ⚠️  Could not update dependencies: ${e.message}\n`));
+  }
+  
+  console.log(c.yellow('Step 3: Updating hooks...\n'));
+  
+  // Run install-hooks
+  await commandInstallHooks();
+  
+  // Get version
+  const pkg = JSON.parse(fs.readFileSync(path.join(installDir, 'package.json'), 'utf8'));
+  
+  console.log(c.cyan('╭─────────────────────────────────────────────────────╮'));
+  console.log(c.cyan('│                                                     │'));
+  console.log(c.cyan('│   ') + c.green('✅ Update complete!') + c.cyan('                            │'));
+  console.log(c.cyan('│                                                     │'));
+  console.log(c.cyan('│   Version: ') + c.green(pkg.version.padEnd(38)) + c.cyan('│'));
+  console.log(c.cyan('│                                                     │'));
+  console.log(c.cyan('│   ') + c.yellow('⚠️  Restart Claude Code') + c.cyan(' to apply changes.      │'));
+  console.log(c.cyan('│                                                     │'));
+  console.log(c.cyan('╰─────────────────────────────────────────────────────╯\n'));
+}
+
 // Main
 const command = process.argv[2] || 'help';
 const args = process.argv.slice(3);
 
 // Handle async commands that need to complete before exit
-const asyncCommands = ['login', 'logout', 'status', 'test', 'env', 'config', 'daemon', 'away', 'back', 'daemon-status', 'command', 'inbox', 'inbox-ack', 'install-hooks'];
+const asyncCommands = ['login', 'logout', 'status', 'test', 'env', 'config', 'daemon', 'away', 'back', 'daemon-status', 'command', 'inbox', 'inbox-ack', 'install-hooks', 'update'];
 if (asyncCommands.includes(command)) {
   // These commands handle their own async execution
 }
@@ -2701,6 +2767,12 @@ try {
     case '--version':
     case '-v':
       commandVersion();
+      break;
+    case 'update':
+      commandUpdate().catch(err => {
+        console.error(c.red('❌ Error:'), err.message);
+        process.exit(1);
+      });
       break;
     case 'help':
     case '--help':
