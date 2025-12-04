@@ -1,6 +1,6 @@
 {
   "name": "@teleportation/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Remote approval system for Claude Code - approve AI coding changes from your phone",
   "type": "module",
   "main": "teleportation-cli.cjs",
@@ -41,6 +41,7 @@
   "files": [
     "lib/",
     ".claude/",
+    "scripts/",
     "teleportation-cli.cjs",
     "README.md",
     "LICENSE"

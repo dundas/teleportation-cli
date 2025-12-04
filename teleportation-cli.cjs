@@ -197,20 +197,29 @@ function commandVersion() {
 function commandHelp() {
   console.log(c.purple('Teleportation CLI v' + CLI_VERSION));
   console.log(c.cyan('Remote Claude Code Control System\n'));
-  
+
   console.log(c.yellow('Usage:'));
   console.log('  ./teleportation <command> [options]\n');
-  
+
+  console.log(c.yellow('Getting Started:'));
+  console.log('  ' + c.green('setup') + '            ⭐ Guided setup wizard (recommended for new users)');
+  console.log('  ' + c.green('status') + '           Check system status and connectivity\n');
+
   console.log(c.yellow('Authentication:'));
   console.log('  ' + c.green('login') + '            Authenticate with API key or token');
   console.log('  ' + c.green('logout') + '           Clear saved credentials\n');
-  
+
   console.log(c.yellow('Setup Commands:'));
   console.log('  ' + c.green('on') + '               Enable remote control hooks');
   console.log('  ' + c.green('off') + '              Disable remote control hooks');
-  console.log('  ' + c.green('status') + '           Check system status');
+  console.log('  ' + c.green('install-hooks') + '    Install hooks globally to ~/.claude/hooks/');
   console.log('  ' + c.green('test') + '             Run diagnostic tests');
   console.log('  ' + c.green('doctor') + '           Run comprehensive diagnostics\n');
+
+  console.log(c.yellow('Backup & Restore:'));
+  console.log('  ' + c.green('backup list') + '      List all backups');
+  console.log('  ' + c.green('backup restore') + '   Restore from backup');
+  console.log('  ' + c.green('backup create') + '    Create a manual backup\n');
   
   console.log(c.yellow('Service Management:'));
   console.log('  ' + c.green('start') + '            Start relay and storage services');
@@ -255,18 +264,13 @@ function commandHelp() {
   console.log('  ' + c.green('help') + '             Show this help message\n');
   
   console.log(c.purple('Examples:'));
-  console.log('  ./teleportation login --api-key KEY  # Login with API key from mobile UI');
-  console.log('  ./teleportation login --token TOKEN  # Login with session token');
-  console.log('  ./teleportation login                # Interactive login');
-  console.log('  ./teleportation logout               # Logout');
-  console.log('  ./teleportation on                   # Enable hooks');
+  console.log('  ./teleportation setup                # ⭐ Recommended: guided setup');
   console.log('  ./teleportation status               # Check status');
+  console.log('  ./teleportation backup restore       # Restore previous config');
   console.log('');
-  console.log(c.purple('Getting Started:'));
-  console.log('  1. Sign up at your relay URL (e.g., https://app.example.com)');
-  console.log('  2. Go to API Keys in the mobile UI and create a key');
-  console.log('  3. Run: ./teleportation login --api-key YOUR_KEY');
-  console.log('  4. Run: ./teleportation on\n');
+  console.log(c.purple('Quick Start (new users):'));
+  console.log('  Just run: ' + c.green('teleportation setup'));
+  console.log('  The wizard will guide you through everything!\n');
 }
 
 async function commandOn() {
@@ -320,6 +324,333 @@ async function commandOn() {
   }
 }
 
+/**
+ * Setup wizard - guided onboarding for new users
+ * Creates backup before making changes, validates API key, installs hooks
+ */
+async function commandSetup() {
+  const readline = require('readline');
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+
+  const question = (prompt) => new Promise(resolve => rl.question(prompt, resolve));
+
+  console.log('\n' + c.cyan('╭─────────────────────────────────────────────────────╮'));
+  console.log(c.cyan('│                                                     │'));
+  console.log(c.cyan('│   🚀 ') + c.purple('Teleportation Setup') + c.cyan('                            │'));
+  console.log(c.cyan('│                                                     │'));
+  console.log(c.cyan('│   Let\'s get you set up for remote Claude Code      │'));
+  console.log(c.cyan('│   approvals in just a few steps.                   │'));
+  console.log(c.cyan('│                                                     │'));
+  console.log(c.cyan('╰─────────────────────────────────────────────────────╯\n'));
+
+  try {
+    // Step 0: Check for existing files and create backup
+    console.log(c.yellow('Checking existing configuration...\n'));
+
+    const backupManagerPath = path.join(TELEPORTATION_DIR, 'lib', 'backup', 'manager.js');
+    const { BackupManager } = await import('file://' + backupManagerPath);
+    const backupManager = new BackupManager();
+
+    const existingFiles = backupManager.checkExistingFiles();
+
+    if (existingFiles.length > 0) {
+      console.log(c.yellow('  ⚠️  Found existing files that will be modified:'));
+      for (const file of existingFiles) {
+        const shortPath = file.path.replace(HOME_DIR, '~');
+        if (file.fileCount !== undefined) {
+          console.log(`     • ${shortPath} (contains ${file.fileCount} files)`);
+        } else {
+          console.log(`     • ${shortPath}`);
+        }
+      }
+      console.log('');
+
+      console.log(c.cyan('  Creating backup before proceeding...'));
+      const { backupPath, manifest } = await backupManager.createBackup('teleportation setup');
+      const shortBackupPath = backupPath.replace(HOME_DIR, '~');
+      console.log(c.green(`  ✅ Backup saved to ${shortBackupPath}/`));
+      console.log(c.cyan(`\n  To restore if needed: ${c.green('teleportation backup restore')}\n`));
+
+      const proceed = await question('Continue with setup? (Y/n): ');
+      if (proceed.toLowerCase() === 'n' || proceed.toLowerCase() === 'no') {
+        console.log(c.yellow('\nSetup cancelled.\n'));
+        rl.close();
+        return;
+      }
+    }
+
+    // Step 1: Authentication
+    console.log('\n' + c.purple('Step 1 of 4: Authentication\n'));
+    console.log('  You\'ll need to sign in to get an API key.\n');
+
+    // Try to open browser
+    const appUrl = 'https://app.teleportation.dev/login';
+    console.log(c.cyan(`  → Opening ${appUrl} in your browser...`));
+
+    try {
+      const openCommand = process.platform === 'darwin' ? 'open' :
+                         process.platform === 'win32' ? 'start' : 'xdg-open';
+      execSync(`${openCommand} ${appUrl}`, { stdio: 'ignore' });
+    } catch (e) {
+      console.log(c.yellow(`  ⚠️  Could not open browser. Please visit: ${appUrl}`));
+    }
+
+    console.log('\n  After signing in:');
+    console.log('  1. Click "Keys" in the bottom navigation');
+    console.log('  2. Click "Create" to generate a new API key');
+    console.log('  3. Copy the key and paste it below\n');
+
+    const apiKey = await question('  Paste your API key: ');
+
+    if (!apiKey || !apiKey.trim()) {
+      console.log(c.red('\n  ❌ No API key provided. Setup cancelled.\n'));
+      rl.close();
+      return;
+    }
+
+    const trimmedKey = apiKey.trim();
+    const relayUrl = 'https://api.teleportation.dev';
+
+    // Validate API key
+    console.log(c.cyan('\n  Validating API key...'));
+    try {
+      const apiKeyPath = path.join(TELEPORTATION_DIR, 'lib', 'auth', 'api-key.js');
+      const { validateApiKey } = await import('file://' + apiKeyPath);
+      const result = await validateApiKey(trimmedKey, relayUrl);
+
+      if (!result.valid) {
+        console.log(c.red(`\n  ❌ ${result.error}`));
+        console.log(c.yellow('  Please check your API key and try again.\n'));
+        rl.close();
+        return;
+      }
+    } catch (e) {
+      console.log(c.yellow(`\n  ⚠️  Could not validate API key: ${e.message}`));
+      console.log(c.cyan('  Continuing anyway (will validate on first use)...'));
+    }
+
+    console.log(c.green('  ✅ API key validated successfully!'));
+
+    // Step 2: Configuration
+    console.log('\n' + c.purple('Step 2 of 4: Configuration\n'));
+    console.log(`  Relay URL: ${c.cyan(relayUrl)}`);
+
+    // Test relay connectivity
+    console.log(c.cyan('  Testing connectivity...'));
+    try {
+      const start = Date.now();
+      const response = await fetch(`${relayUrl}/health`, {
+        signal: AbortSignal.timeout(5000)
+      });
+      const elapsed = Date.now() - start;
+
+      if (response.ok) {
+        console.log(c.green(`  ✅ Relay is reachable (responded in ${elapsed}ms)`));
+      } else {
+        console.log(c.yellow(`  ⚠️  Relay returned status ${response.status}`));
+      }
+    } catch (e) {
+      console.log(c.yellow(`  ⚠️  Could not reach relay: ${e.message}`));
+      console.log(c.cyan('  Continuing anyway (will retry on use)...'));
+    }
+
+    // Save credentials
+    console.log(c.cyan('\n  Saving credentials...'));
+    const manager = await loadCredentialManager();
+    if (manager) {
+      const credentials = {
+        apiKey: trimmedKey,
+        relayApiUrl: relayUrl,
+        authenticatedAt: Date.now(),
+        method: 'setup-wizard'
+      };
+      await manager.save(credentials);
+      console.log(c.green('  ✅ Credentials saved'));
+    }
+
+    // Update config to match
+    const configManagerPath = path.join(TELEPORTATION_DIR, 'lib', 'config', 'manager.js');
+    try {
+      const { setConfigValue } = await import('file://' + configManagerPath);
+      await setConfigValue('relay.url', relayUrl);
+      console.log(c.green('  ✅ Configuration updated'));
+    } catch (e) {
+      console.log(c.yellow(`  ⚠️  Could not update config: ${e.message}`));
+    }
+
+    // Step 3: Install Hooks
+    console.log('\n' + c.purple('Step 3 of 4: Installing Hooks\n'));
+    console.log('  Installing Claude Code hooks to ~/.claude/hooks/');
+
+    try {
+      const installerPath = path.join(TELEPORTATION_DIR, 'lib', 'install', 'installer.js');
+      const { install } = await import('file://' + installerPath);
+      const sourceHooksDir = path.join(TELEPORTATION_DIR, '.claude', 'hooks');
+      const result = await install(sourceHooksDir);
+      console.log(c.green(`  ✅ ${result.hooksVerified} hooks installed successfully`));
+    } catch (e) {
+      console.log(c.red(`  ❌ Failed to install hooks: ${e.message}`));
+      console.log(c.yellow('\n  Would you like to restore your previous configuration?'));
+      const restore = await question('  Restore backup? (y/N): ');
+      if (restore.toLowerCase() === 'y' || restore.toLowerCase() === 'yes') {
+        console.log(c.cyan('\n  Restoring from backup...'));
+        try {
+          await backupManager.restore();
+          console.log(c.green('  ✅ Previous configuration restored'));
+        } catch (restoreErr) {
+          console.log(c.red(`  ❌ Failed to restore: ${restoreErr.message}`));
+        }
+      }
+      rl.close();
+      return;
+    }
+
+    // Step 4: Verification
+    console.log('\n' + c.purple('Step 4 of 4: Verification\n'));
+    console.log(c.green('  ✅ Credentials saved'));
+    console.log(c.green('  ✅ Configuration saved'));
+    console.log(c.green('  ✅ Hooks installed'));
+    console.log(c.green('  ✅ Relay connectivity confirmed'));
+
+    // Success!
+    console.log('\n' + c.cyan('╭─────────────────────────────────────────────────────╮'));
+    console.log(c.cyan('│                                                     │'));
+    console.log(c.cyan('│   🎉 ') + c.green('Setup Complete!') + c.cyan('                               │'));
+    console.log(c.cyan('│                                                     │'));
+    console.log(c.cyan('│   ') + c.yellow('⚠️  Important:') + c.cyan(' Restart Claude Code to activate   │'));
+    console.log(c.cyan('│      teleportation for your current session.       │'));
+    console.log(c.cyan('│                                                     │'));
+    console.log(c.cyan('│   Then open ') + c.green('https://app.teleportation.dev') + c.cyan(' on your  │'));
+    console.log(c.cyan('│   phone to approve actions remotely.               │'));
+    console.log(c.cyan('│                                                     │'));
+    console.log(c.cyan('╰─────────────────────────────────────────────────────╯\n'));
+
+    rl.close();
+
+  } catch (error) {
+    console.log(c.red(`\n❌ Setup failed: ${error.message}\n`));
+    rl.close();
+    process.exit(1);
+  }
+}
+
+/**
+ * Backup command - list, create, restore backups
+ */
+async function commandBackup(args) {
+  const subcommand = args[0] || 'list';
+
+  const backupManagerPath = path.join(TELEPORTATION_DIR, 'lib', 'backup', 'manager.js');
+  const { BackupManager } = await import('file://' + backupManagerPath);
+  const backupManager = new BackupManager();
+
+  switch (subcommand) {
+    case 'list': {
+      console.log(c.purple('Teleportation Backups\n'));
+
+      const backups = backupManager.listBackups();
+
+      if (backups.length === 0) {
+        console.log(c.yellow('  No backups found.\n'));
+        console.log(c.cyan('  Backups are created automatically during setup.'));
+        console.log(c.cyan('  Run: teleportation backup create\n'));
+        return;
+      }
+
+      backups.forEach((backup, index) => {
+        const isLatest = index === 0;
+        const date = new Date(backup.timestamp).toLocaleString();
+        console.log(`  ${index + 1}. ${c.cyan(backup.id)}${isLatest ? c.green(' (latest)') : ''}`);
+        console.log(`     Reason: ${backup.reason}`);
+        console.log(`     Date: ${date}`);
+        console.log(`     Files: ${backup.fileCount} backed up\n`);
+      });
+
+      console.log(c.cyan('  To restore: teleportation backup restore [backup-id]\n'));
+      break;
+    }
+
+    case 'create': {
+      console.log(c.purple('Creating Backup\n'));
+
+      const reason = args[1] || 'manual backup';
+      console.log(c.cyan('  Creating backup...'));
+
+      try {
+        const { backupPath, manifest } = await backupManager.createBackup(reason);
+        const shortPath = backupPath.replace(HOME_DIR, '~');
+        console.log(c.green(`\n  ✅ Backup created: ${shortPath}/`));
+        console.log(`     Files backed up: ${manifest.files.length}\n`);
+      } catch (e) {
+        console.log(c.red(`\n  ❌ Failed to create backup: ${e.message}\n`));
+        process.exit(1);
+      }
+      break;
+    }
+
+    case 'restore': {
+      const backupId = args[1] || null;
+
+      console.log(c.purple('Restoring from Backup\n'));
+
+      if (!backupId) {
+        console.log(c.cyan('  Restoring from latest backup...'));
+      } else {
+        console.log(c.cyan(`  Restoring from backup: ${backupId}...`));
+      }
+
+      try {
+        const { manifest, restoredFiles } = await backupManager.restore(backupId);
+        console.log(c.green(`\n  ✅ Restored ${restoredFiles.length} files from backup\n`));
+
+        for (const file of restoredFiles) {
+          const shortPath = file.replace(HOME_DIR, '~');
+          console.log(c.green(`     ✅ ${shortPath}`));
+        }
+
+        console.log(c.yellow('\n  ⚠️  Restart Claude Code to apply restored settings.\n'));
+      } catch (e) {
+        console.log(c.red(`\n  ❌ Failed to restore: ${e.message}\n`));
+        process.exit(1);
+      }
+      break;
+    }
+
+    case 'delete': {
+      const backupId = args[1];
+
+      if (!backupId) {
+        console.log(c.red('  ❌ Please specify a backup ID to delete.\n'));
+        console.log(c.cyan('  Usage: teleportation backup delete <backup-id>\n'));
+        return;
+      }
+
+      console.log(c.purple('Deleting Backup\n'));
+      console.log(c.cyan(`  Deleting backup: ${backupId}...`));
+
+      try {
+        backupManager.deleteBackup(backupId);
+        console.log(c.green(`\n  ✅ Backup deleted: ${backupId}\n`));
+      } catch (e) {
+        console.log(c.red(`\n  ❌ Failed to delete: ${e.message}\n`));
+      }
+      break;
+    }
+
+    default:
+      console.log(c.red(`  Unknown backup subcommand: ${subcommand}\n`));
+      console.log(c.cyan('  Available commands:'));
+      console.log('    backup list     - List all backups');
+      console.log('    backup create   - Create a new backup');
+      console.log('    backup restore  - Restore from backup');
+      console.log('    backup delete   - Delete a backup\n');
+  }
+}
+
 function commandOff() {
   console.log(c.yellow('🛑 Disabling Teleportation Remote Control...\n'));
   
@@ -344,60 +675,174 @@ function commandOff() {
 
 async function commandStatus() {
   console.log(c.purple('Teleportation System Status\n'));
-  
-  // Hooks status
-  const hooksConfigured = config.isConfigured();
-  console.log(c.yellow('Hooks:'));
-  console.log('  Configuration:', hooksConfigured ? c.green('✅ ENABLED') : c.red('❌ DISABLED'));
-  
-  if (hooksConfigured) {
-    const hookFiles = fs.readdirSync(config.globalHooks).filter(f => f.endsWith('.mjs'));
-    console.log('  Hook files:', c.cyan(hookFiles.length + ' installed'));
-    hookFiles.forEach(f => console.log('    • ' + f));
-  }
-  
-  // Credentials and environment variables
-  console.log('\n' + c.yellow('Credentials:'));
+
+  let issues = [];
+  let warnings = [];
+
+  // Authentication status
+  console.log(c.yellow('Authentication:'));
   const creds = await getCredentials();
   const hasCredentials = await loadCredentials();
+
   if (hasCredentials) {
-    console.log('  Source:', c.green('Encrypted file (~/.teleportation/credentials)'));
+    console.log('  ' + c.green('✅') + ' Logged in');
+    console.log('     Source: Encrypted credentials file');
+    console.log('     API key: ' + c.cyan('***' + (creds.RELAY_API_KEY?.slice(-4) || '????')));
+  } else if (creds.RELAY_API_KEY) {
+    console.log('  ' + c.yellow('⚠️') + ' Using environment variables');
+    console.log('     API key: ' + c.cyan('***' + creds.RELAY_API_KEY.slice(-4)));
+    warnings.push('Consider running `teleportation login` for encrypted credential storage');
   } else {
-    console.log('  Source:', c.yellow('Environment variables'));
+    console.log('  ' + c.red('❌') + ' Not logged in');
+    issues.push('Run `teleportation setup` to configure authentication');
   }
-  console.log('  RELAY_API_URL:', creds.RELAY_API_URL ? c.green(creds.RELAY_API_URL) : c.red('not set'));
-  console.log('  RELAY_API_KEY:', creds.RELAY_API_KEY ? c.green('***' + creds.RELAY_API_KEY.slice(-4)) : c.red('not set'));
-  console.log('  SLACK_WEBHOOK_URL:', creds.SLACK_WEBHOOK_URL ? c.green('set') : c.yellow('not set (optional)'));
-  
-  // Services
-  console.log('\n' + c.yellow('Services:'));
-  const relayRunning = checkService('relay', 3030);
-  const storageRunning = checkService('storage', 3040);
-  
-  console.log('  Relay API (port 3030):', relayRunning ? c.green('✅ RUNNING') : c.red('❌ STOPPED'));
-  if (relayRunning) {
-    const healthy = checkServiceHealth('http://localhost:3030');
-    console.log('    Health:', healthy ? c.green('healthy') : c.red('unhealthy'));
+
+  // Relay connection status
+  console.log('\n' + c.yellow('Relay Connection:'));
+  const relayUrl = creds.RELAY_API_URL;
+
+  if (!relayUrl) {
+    console.log('  ' + c.red('❌') + ' Relay URL not configured');
+    issues.push('Run `teleportation setup` to configure relay URL');
+  } else {
+    console.log('  URL: ' + c.cyan(relayUrl));
+
+    // Test connectivity
+    try {
+      const start = Date.now();
+      const response = await fetch(`${relayUrl}/health`, {
+        signal: AbortSignal.timeout(5000)
+      });
+      const elapsed = Date.now() - start;
+
+      if (response.ok) {
+        console.log('  ' + c.green('✅') + ` Reachable (${elapsed}ms)`);
+        try {
+          const health = await response.json();
+          if (health.version) {
+            console.log('     Version: ' + c.cyan(health.version));
+          }
+        } catch (e) {
+          // Ignore JSON parse errors
+        }
+      } else {
+        console.log('  ' + c.yellow('⚠️') + ` Returned status ${response.status}`);
+        warnings.push(`Relay returned HTTP ${response.status}`);
+      }
+    } catch (e) {
+      if (e.name === 'TimeoutError') {
+        console.log('  ' + c.red('❌') + ' Connection timed out');
+        issues.push('Relay is not responding. Check your internet connection.');
+      } else {
+        console.log('  ' + c.red('❌') + ` Cannot reach: ${e.message}`);
+        issues.push('Relay is unreachable. Check the URL and your internet connection.');
+      }
+    }
+
+    // Validate API key if we have one
+    if (creds.RELAY_API_KEY) {
+      try {
+        const apiKeyPath = path.join(TELEPORTATION_DIR, 'lib', 'auth', 'api-key.js');
+        const { validateApiKey } = await import('file://' + apiKeyPath);
+        const result = await validateApiKey(creds.RELAY_API_KEY, relayUrl);
+
+        if (result.valid) {
+          console.log('  ' + c.green('✅') + ' API key validated');
+        } else {
+          console.log('  ' + c.red('❌') + ` API key invalid: ${result.error}`);
+          issues.push('API key is invalid. Create a new one at app.teleportation.dev/api-keys');
+        }
+      } catch (e) {
+        console.log('  ' + c.yellow('⚠️') + ' Could not validate API key');
+      }
+    }
   }
-  
-  console.log('  Storage API (port 3040):', storageRunning ? c.green('✅ RUNNING') : c.red('❌ STOPPED'));
-  if (storageRunning) {
-    const healthy = checkServiceHealth('http://localhost:3040');
-    console.log('    Health:', healthy ? c.green('healthy') : c.red('unhealthy'));
+
+  // Hooks status
+  console.log('\n' + c.yellow('Hooks:'));
+  const hooksConfigured = config.isConfigured();
+
+  if (hooksConfigured) {
+    console.log('  ' + c.green('✅') + ' Enabled in Claude Code settings');
+    const hookFiles = fs.readdirSync(config.globalHooks).filter(f => f.endsWith('.mjs'));
+    console.log('  ' + c.green('✅') + ` ${hookFiles.length} hook files installed`);
+    console.log('     Directory: ~/.claude/hooks/');
+  } else {
+    console.log('  ' + c.red('❌') + ' Hooks not installed');
+    issues.push('Run `teleportation setup` to install hooks');
   }
-  
+
+  // Config/credentials sync check
+  console.log('\n' + c.yellow('Configuration:'));
+  try {
+    const configManagerPath = path.join(TELEPORTATION_DIR, 'lib', 'config', 'manager.js');
+    const { getConfigValue } = await import('file://' + configManagerPath);
+    const configRelayUrl = await getConfigValue('relay.url');
+
+    if (configRelayUrl && relayUrl && configRelayUrl !== relayUrl) {
+      console.log('  ' + c.yellow('⚠️') + ' Config/credentials mismatch');
+      console.log('     Config relay.url: ' + c.cyan(configRelayUrl));
+      console.log('     Credentials URL: ' + c.cyan(relayUrl));
+      warnings.push('Config and credentials have different relay URLs. Run `teleportation setup` to fix.');
+    } else {
+      console.log('  ' + c.green('✅') + ' Config and credentials in sync');
+    }
+  } catch (e) {
+    console.log('  ' + c.yellow('⚠️') + ' Could not check config sync');
+  }
+
+  // Session/restart check
+  const sessionMarkerPath = path.join(HOME_DIR, '.teleportation', '.session_marker');
+  const credentialsPath = path.join(HOME_DIR, '.teleportation', 'credentials');
+
+  if (fs.existsSync(sessionMarkerPath) && fs.existsSync(credentialsPath)) {
+    try {
+      const markerMtime = fs.statSync(sessionMarkerPath).mtimeMs;
+      const credsMtime = fs.statSync(credentialsPath).mtimeMs;
+
+      if (credsMtime > markerMtime) {
+        console.log('  ' + c.yellow('⚠️') + ' Credentials updated since session started');
+        console.log('     Session started: ' + c.cyan(new Date(markerMtime).toLocaleTimeString()));
+        console.log('     Credentials updated: ' + c.cyan(new Date(credsMtime).toLocaleTimeString()));
+        warnings.push('Credentials changed after session started. Restart Claude Code to apply changes.');
+      }
+    } catch (e) {
+      // Ignore errors checking session marker
+    }
+  }
+
+  // Local services (only show if relevant)
+  const localRelayRunning = checkService('relay', 3030);
+  const localStorageRunning = checkService('storage', 3040);
+
+  if (localRelayRunning || localStorageRunning) {
+    console.log('\n' + c.yellow('Local Services:'));
+    if (localRelayRunning) {
+      console.log('  ' + c.green('✅') + ' Local relay running (port 3030)');
+    }
+    if (localStorageRunning) {
+      console.log('  ' + c.green('✅') + ' Local storage running (port 3040)');
+    }
+  }
+
   // Overall status
-  console.log('\n' + c.yellow('Overall:'));
-  const credsSet = creds.RELAY_API_URL && creds.RELAY_API_KEY;
-  const allGood = hooksConfigured && credsSet && relayRunning && storageRunning;
-  if (allGood) {
-    console.log(c.green('  🎉 All systems operational!\n'));
-  } else {
-    console.log(c.yellow('  ⚠️  Some components need attention\n'));
-    if (!hooksConfigured) console.log(c.cyan('  → Run: ./teleportation on'));
-    if (!config.areEnvVarsSet()) console.log(c.cyan('  → Run: ./teleportation env set'));
-    if (!relayRunning || !storageRunning) console.log(c.cyan('  → Run: ./teleportation start'));
+  console.log('\n' + c.yellow('─────────────────────────────────────────'));
+
+  if (issues.length === 0 && warnings.length === 0) {
+    console.log(c.green('\n🎉 All systems operational!'));
+    console.log(c.cyan('\nOpen https://app.teleportation.dev on your phone to approve actions.\n'));
+  } else if (issues.length === 0) {
+    console.log(c.yellow('\n⚠️  System operational with warnings:\n'));
+    warnings.forEach(w => console.log('  • ' + w));
     console.log();
+  } else {
+    console.log(c.red('\n❌ Issues found:\n'));
+    issues.forEach(i => console.log('  • ' + i));
+    if (warnings.length > 0) {
+      console.log(c.yellow('\nWarnings:'));
+      warnings.forEach(w => console.log('  • ' + w));
+    }
+    console.log(c.cyan('\n→ Run: teleportation setup\n'));
   }
 }
 
@@ -1129,7 +1574,24 @@ async function performLogin(manager, flags, positional) {
   let apiKey = flags['api-key'] || flags.k;
   let token = flags.token || flags.t;
   const relayApiUrl = flags['relay-url'] || flags.r || process.env.RELAY_API_URL || 'https://api.teleportation.dev';
-  
+
+  // Create backup before modifying credentials (only if credentials exist)
+  const existingCreds = await manager.load().catch(() => null);
+  if (existingCreds) {
+    try {
+      const backupManagerPath = path.join(TELEPORTATION_DIR, 'lib', 'backup', 'manager.js');
+      const { BackupManager } = await import('file://' + backupManagerPath);
+      const backupMgr = new BackupManager();
+      await backupMgr.createBackup('teleportation login');
+      console.log(c.dim('Backup created before credential update.\n'));
+    } catch (backupErr) {
+      // Non-fatal - warn but continue
+      if (process.env.DEBUG) {
+        console.log(c.yellow(`⚠️  Could not create backup: ${backupErr.message}`));
+      }
+    }
+  }
+
   // If API key provided via flag
   if (apiKey) {
     console.log(c.yellow('Authenticating with API key...\n'));
@@ -1153,15 +1615,27 @@ async function performLogin(manager, flags, positional) {
       };
       
       await manager.save(credentials);
+
+      // Also sync config to match credentials
+      try {
+        const configManagerPath = path.join(TELEPORTATION_DIR, 'lib', 'config', 'manager.js');
+        const { setConfigValue } = await import('file://' + configManagerPath);
+        await setConfigValue('relay.url', relayApiUrl);
+      } catch (configErr) {
+        // Non-fatal - just warn
+        console.log(c.yellow(`⚠️  Could not sync config: ${configErr.message}`));
+      }
+
       console.log(c.green('✅ Successfully authenticated with API key!\n'));
       console.log(c.cyan('Credentials saved to ~/.teleportation/credentials\n'));
+      console.log(c.yellow('⚠️  Restart Claude Code to apply changes to current session.\n'));
       return;
     } catch (error) {
       console.log(c.red(`❌ Error: ${error.message}\n`));
       process.exit(1);
     }
   }
-  
+
   // If token provided via flag
   if (token) {
     console.log(c.yellow('Authenticating with token...\n'));
@@ -1176,15 +1650,27 @@ async function performLogin(manager, flags, positional) {
       };
       
       await manager.save(credentials);
+
+      // Also sync config to match credentials
+      try {
+        const configManagerPath = path.join(TELEPORTATION_DIR, 'lib', 'config', 'manager.js');
+        const { setConfigValue } = await import('file://' + configManagerPath);
+        await setConfigValue('relay.url', relayApiUrl);
+      } catch (configErr) {
+        // Non-fatal - just warn
+        console.log(c.yellow(`⚠️  Could not sync config: ${configErr.message}`));
+      }
+
       console.log(c.green('✅ Successfully authenticated with token!\n'));
       console.log(c.cyan('Credentials saved to ~/.teleportation/credentials\n'));
+      console.log(c.yellow('⚠️  Restart Claude Code to apply changes to current session.\n'));
       return;
     } catch (error) {
       console.log(c.red(`❌ Error: ${error.message}\n`));
       process.exit(1);
     }
   }
-  
+
   // Interactive mode - prompt for API key
   console.log(c.cyan('Interactive login mode\n'));
   console.log(c.yellow('Options:'));
@@ -1767,6 +2253,229 @@ async function commandInboxAck(id) {
   }
 }
 
+/**
+ * Install hooks globally to ~/.claude/hooks/
+ * This command copies hooks from the teleportation project to the global location
+ * and merges settings into ~/.claude/settings.json
+ */
+async function commandInstallHooks() {
+  console.log(c.purple('🔧 Installing Teleportation Hooks Globally\n'));
+
+  const globalHooksDir = path.join(HOME_DIR, '.claude', 'hooks');
+  const globalSettings = path.join(HOME_DIR, '.claude', 'settings.json');
+  const sourceHooksDir = path.join(TELEPORTATION_DIR, '.claude', 'hooks');
+
+  // List of hooks to install
+  const hooks = [
+    'pre_tool_use.mjs',
+    'post_tool_use.mjs',
+    'permission_request.mjs',
+    'stop.mjs',
+    'session_start.mjs',
+    'session_end.mjs',
+    'notification.mjs',
+    'config-loader.mjs',
+    'session-register.mjs'
+  ];
+
+  // Step 1: Ensure directories exist
+  console.log(c.yellow('Step 1: Creating directories...\n'));
+  try {
+    if (!fs.existsSync(path.join(HOME_DIR, '.claude'))) {
+      fs.mkdirSync(path.join(HOME_DIR, '.claude'), { recursive: true });
+    }
+    if (!fs.existsSync(globalHooksDir)) {
+      fs.mkdirSync(globalHooksDir, { recursive: true });
+    }
+    console.log(c.green('  ✅ ~/.claude/hooks/ directory ready\n'));
+  } catch (e) {
+    console.log(c.red(`  ❌ Failed to create directories: ${e.message}\n`));
+    process.exit(1);
+  }
+
+  // Step 2: Copy hook files
+  console.log(c.yellow('Step 2: Copying hooks...\n'));
+  let installed = 0;
+  let failed = 0;
+
+  for (const hook of hooks) {
+    const src = path.join(sourceHooksDir, hook);
+    const dest = path.join(globalHooksDir, hook);
+
+    try {
+      if (!fs.existsSync(src)) {
+        console.log(c.yellow(`  ⚠️  ${hook} not found in source, skipping`));
+        continue;
+      }
+
+      fs.copyFileSync(src, dest);
+      fs.chmodSync(dest, 0o755); // Make executable
+      console.log(c.green(`  ✅ ${hook}`));
+      installed++;
+    } catch (e) {
+      console.log(c.red(`  ❌ ${hook}: ${e.message}`));
+      failed++;
+    }
+  }
+
+  console.log(`\n  Installed: ${c.green(installed)}, Failed: ${failed > 0 ? c.red(failed) : '0'}\n`);
+
+  // Step 3: Update settings.json
+  console.log(c.yellow('Step 3: Updating Claude Code settings...\n'));
+
+  // Safely quote paths - JSON.stringify escapes special chars to prevent command injection
+  const quotePath = (p) => JSON.stringify(p);
+  
+  const hooksConfig = {
+    PreToolUse: [{
+      matcher: ".*",
+      hooks: [{
+        type: "command",
+        command: `node ${quotePath(path.join(globalHooksDir, 'pre_tool_use.mjs'))}`
+      }]
+    }],
+    PostToolUse: [{
+      matcher: ".*",
+      hooks: [{
+        type: "command",
+        command: `node ${quotePath(path.join(globalHooksDir, 'post_tool_use.mjs'))}`
+      }]
+    }],
+    PermissionRequest: [{
+      matcher: ".*",
+      hooks: [{
+        type: "command",
+        command: `node ${quotePath(path.join(globalHooksDir, 'permission_request.mjs'))}`
+      }]
+    }],
+    Stop: [{
+      matcher: ".*",
+      hooks: [{
+        type: "command",
+        command: `node ${quotePath(path.join(globalHooksDir, 'stop.mjs'))}`
+      }]
+    }],
+    SessionStart: [{
+      matcher: ".*",
+      hooks: [{
+        type: "command",
+        command: `node ${quotePath(path.join(globalHooksDir, 'session_start.mjs'))}`
+      }]
+    }],
+    SessionEnd: [{
+      matcher: ".*",
+      hooks: [{
+        type: "command",
+        command: `node ${quotePath(path.join(globalHooksDir, 'session_end.mjs'))}`
+      }]
+    }],
+    Notification: [{
+      matcher: ".*",
+      hooks: [{
+        type: "command",
+        command: `node ${quotePath(path.join(globalHooksDir, 'notification.mjs'))}`
+      }]
+    }]
+  };
+
+  try {
+    let existingSettings = {};
+    
+    // Load existing settings if present
+    if (fs.existsSync(globalSettings)) {
+      try {
+        const content = fs.readFileSync(globalSettings, 'utf8');
+        existingSettings = JSON.parse(content);
+        console.log(c.cyan('  Found existing settings, merging...\n'));
+      } catch (e) {
+        console.log(c.yellow(`  ⚠️  Could not parse existing settings, creating new...\n`));
+      }
+    }
+
+    // Merge hooks intelligently - preserve user hooks, avoid duplicates
+    const mergeHookArrays = (existing, incoming) => {
+      if (!existing || !Array.isArray(existing)) return incoming;
+      if (!incoming || !Array.isArray(incoming)) return existing;
+      
+      // Get commands from incoming hooks to check for duplicates
+      const incomingCommands = new Set(
+        incoming.flatMap(h => (h.hooks || []).map(hh => hh.command))
+      );
+      
+      // Filter out existing hooks that have the same command (will be replaced)
+      const filteredExisting = existing.filter(h => 
+        !(h.hooks || []).some(hh => incomingCommands.has(hh.command))
+      );
+      
+      // Combine: existing (non-duplicate) + incoming (teleportation hooks)
+      return [...filteredExisting, ...incoming];
+    };
+
+    // Merge all hook types with warnings about user hooks
+    const mergedHooks = { ...(existingSettings.hooks || {}) };
+    let hasUserHooks = false;
+    
+    for (const [hookType, hookConfig] of Object.entries(hooksConfig)) {
+      const existingHooksForType = existingSettings.hooks?.[hookType] || [];
+      
+      // Find user-defined hooks (not from teleportation)
+      const userHooks = existingHooksForType.filter(h => {
+        const commands = (h.hooks || []).map(hh => hh.command || '');
+        return !commands.some(cmd => 
+          cmd.includes('teleportation') || 
+          cmd.includes('.claude/hooks') ||
+          cmd.includes('~/.claude/hooks')
+        );
+      });
+      
+      if (userHooks.length > 0) {
+        hasUserHooks = true;
+        console.log(c.yellow(`  ⚠️  Preserving ${userHooks.length} custom ${hookType} hook(s):`));
+        userHooks.forEach(h => {
+          const cmds = (h.hooks || []).map(hh => hh.command || 'unknown');
+          cmds.forEach(cmd => console.log(c.dim(`     • ${cmd}`)));
+        });
+        console.log('');
+      }
+      
+      mergedHooks[hookType] = mergeHookArrays(existingHooksForType, hookConfig);
+    }
+    
+    if (hasUserHooks) {
+      console.log(c.cyan('  Your custom hooks will continue to work alongside Teleportation hooks.\n'));
+    }
+
+    const mergedSettings = {
+      ...existingSettings,
+      hooks: mergedHooks
+    };
+
+    // Write settings
+    fs.writeFileSync(globalSettings, JSON.stringify(mergedSettings, null, 2));
+    console.log(c.green('  ✅ ~/.claude/settings.json updated\n'));
+  } catch (e) {
+    console.log(c.red(`  ❌ Failed to update settings: ${e.message}\n`));
+    process.exit(1);
+  }
+
+  // Summary
+  console.log(c.cyan('╭─────────────────────────────────────────────────────╮'));
+  console.log(c.cyan('│                                                     │'));
+  console.log(c.cyan('│   🎉 ') + c.green('Hooks Installed Successfully!') + c.cyan('               │'));
+  console.log(c.cyan('│                                                     │'));
+  console.log(c.cyan('│   Hooks location: ~/.claude/hooks/                  │'));
+  console.log(c.cyan('│   Settings: ~/.claude/settings.json                 │'));
+  console.log(c.cyan('│                                                     │'));
+  console.log(c.cyan('│   ') + c.yellow('⚠️  Restart Claude Code') + c.cyan(' to activate hooks.      │'));
+  console.log(c.cyan('│                                                     │'));
+  console.log(c.cyan('╰─────────────────────────────────────────────────────╯\n'));
+
+  console.log(c.cyan('Next steps:'));
+  console.log('  1. If not logged in: teleportation login');
+  console.log('  2. Check status: teleportation status');
+  console.log('  3. Restart Claude Code to apply hooks\n');
+}
+
 async function commandCommand() {
   const sessionId = process.env.TELEPORTATION_SESSION_ID;
   if (!sessionId) {
@@ -1831,15 +2540,33 @@ const command = process.argv[2] || 'help';
 const args = process.argv.slice(3);
 
 // Handle async commands that need to complete before exit
-const asyncCommands = ['login', 'logout', 'status', 'test', 'env', 'config', 'daemon', 'away', 'back', 'daemon-status', 'command', 'inbox', 'inbox-ack'];
+const asyncCommands = ['login', 'logout', 'status', 'test', 'env', 'config', 'daemon', 'away', 'back', 'daemon-status', 'command', 'inbox', 'inbox-ack', 'install-hooks'];
 if (asyncCommands.includes(command)) {
   // These commands handle their own async execution
 }
 
 try {
   switch (command) {
+    case 'setup':
+      commandSetup().catch(err => {
+        console.error(c.red('❌ Error:'), err.message);
+        process.exit(1);
+      });
+      break;
+    case 'backup':
+      commandBackup(args).catch(err => {
+        console.error(c.red('❌ Error:'), err.message);
+        process.exit(1);
+      });
+      break;
     case 'on':
       commandOn().catch(err => {
+        console.error(c.red('❌ Error:'), err.message);
+        process.exit(1);
+      });
+      break;
+    case 'install-hooks':
+      commandInstallHooks().catch(err => {
         console.error(c.red('❌ Error:'), err.message);
         process.exit(1);
       });

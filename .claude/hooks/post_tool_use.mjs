@@ -80,6 +80,25 @@ const fetchJson = async (url, opts) => {
     return exit(0);
   }
 
+  // Clear any pending approvals for this session since the tool executed successfully
+  // This handles the case where Claude Code auto-approved the tool
+  try {
+    await fetchJson(`${RELAY_API_URL}/api/approvals/invalidate`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${RELAY_API_KEY}`
+      },
+      body: JSON.stringify({
+        session_id,
+        reason: `Tool ${tool_name} executed (auto-approved by Claude Code)`
+      })
+    });
+    log(`Cleared pending approvals after tool execution: ${tool_name}`);
+  } catch (e) {
+    log(`Failed to clear pending approvals: ${e.message}`);
+  }
+
   // Record tool execution to timeline
   try {
     await fetchJson(`${RELAY_API_URL}/api/timeline`, {
@@ -91,8 +110,8 @@ const fetchJson = async (url, opts) => {
       body: JSON.stringify({
         session_id,
         type: 'tool_executed',
-        data: { 
-          tool_name, 
+        data: {
+          tool_name,
           tool_input,
           // Include truncated output for context
           tool_output_preview: (() => {
