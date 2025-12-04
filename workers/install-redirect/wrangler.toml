@@ -1,0 +1,12 @@
+name = "teleportation-install"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+# Route configuration - update with your zone
+# routes = [
+#   { pattern = "get.teleportation.dev/*", zone_name = "teleportation.dev" }
+# ]
+
+# Or use a workers.dev subdomain for testing first
+# workers_dev = true
+

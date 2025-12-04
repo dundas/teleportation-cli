@@ -1,10 +1,10 @@
 #!/bin/sh
 # Teleportation Installer
-# Usage: curl -fsSL https://your-domain.com/install | sh
+# Usage: curl -fsSL https://get.teleportation.dev | bash
 
 set -e
 
-REPO="https://github.com/dundas/teleportation-private.git"
+REPO="https://github.com/dundas/teleportation-cli.git"
 INSTALL_DIR="$HOME/.teleportation-cli"
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
